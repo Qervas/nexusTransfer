@@ -22,6 +22,8 @@ async fn main() -> Result<()> {
     network.start_discovery().await?;
     println!("[*] Starting peer discovery...");
 
+    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+
     // Start listener
     let net_clone = network.clone();
     let ft_clone = file_transfer.clone();

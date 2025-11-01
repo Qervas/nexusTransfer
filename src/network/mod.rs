@@ -32,38 +32,57 @@ impl Network {
     }
 
     pub async fn start_discovery(&self) -> Result<()> {
+        let mut properties = std::collections::HashMap::new();
+        properties.insert("id".to_string(), self.peer_id.to_string());
+
         let service_info = ServiceInfo::new(
             SERVICE_TYPE,
             &self.peer_name,
             &format!("{}.local.", self.peer_name),
             "",
             self.port,
-            None,
+            Some(properties),
         )?;
 
         self.mdns.register(service_info)?;
+        println!("[mDNS] Registered as {} with ID {}", self.peer_name, self.peer_id);
 
         let receiver = self.mdns.browse(SERVICE_TYPE)?;
         let peers = self.peers.clone();
-        let my_id = self.peer_id;
+        let my_name = self.peer_name.clone();
 
         tokio::spawn(async move {
             while let Ok(event) = receiver.recv_async().await {
+                println!("[mDNS] Event: {:?}", event);
                 match event {
                     mdns_sd::ServiceEvent::ServiceResolved(info) => {
+                        println!("[mDNS] Resolved service: {}", info.get_fullname());
+
+                        // Skip if it's our own service
+                        if info.get_fullname().starts_with(&my_name) {
+                            println!("[mDNS] Skipping own service");
+                            continue;
+                        }
+
                         if let Some(addr) = info.get_addresses().iter().next() {
+                            // Try to get peer ID from TXT record
+                            let peer_id = info.get_properties()
+                                .get("id")
+                                .and_then(|s| Uuid::parse_str(&s.to_string()).ok())
+                                .unwrap_or_else(Uuid::new_v4);
+
                             let peer = Peer {
-                                id: Uuid::new_v4(), // In real impl, should be from TXT record
+                                id: peer_id,
                                 name: info.get_fullname().to_string(),
                                 addr: format!("{}:{}", addr, info.get_port()),
                             };
 
-                            if peer.id != my_id {
-                                peers.write().await.insert(peer.id, peer);
-                            }
+                            println!("[mDNS] Adding peer: {} ({}) at {}", peer.name, peer.id, peer.addr);
+                            peers.write().await.insert(peer.id, peer);
                         }
                     }
                     mdns_sd::ServiceEvent::ServiceRemoved(_, fullname) => {
+                        println!("[mDNS] Service removed: {}", fullname);
                         let mut peers = peers.write().await;
                         peers.retain(|_, p| p.name != fullname);
                     }
